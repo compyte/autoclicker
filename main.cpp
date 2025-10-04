@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
 
     if (mode != "l" && mode != "r")
     {
-        std::cerr << "Error: Mode must be 'lc' or 'rc'.\n";
+        std::cerr << "Error: Mode must be 'l' or 'r'.\n";
         return 1;
     }
 
