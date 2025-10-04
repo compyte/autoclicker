@@ -1,0 +1,1 @@
+g++ main.cpp -o autoclicker -lX11 -lXtst -lXi
