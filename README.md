@@ -8,6 +8,6 @@ l - left click
 r - right click
 
 # Example:
-```./autoclicker -i 500 -m l```
+```./autoclicker```
 
 delay in ms

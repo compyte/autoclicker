@@ -1,9 +1,3 @@
-#include <QApplication>
-#include <QLabel>
-#include <QPushButton>
-#include <QLineEdit>
-#include <QVBoxLayout>
-#include <QMessageBox>
 #include <iostream>
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
@@ -13,42 +7,140 @@
 #include <cstdio>
 #include <thread>
 
-#include "AutoClicker.h"
-
 using namespace std;
 
-static AutoClicker autoClicker;
+static volatile sig_atomic_t keep_running = 1;
+void handle_sigint(int) { keep_running = 0; }
 
+static int xi_opcode = 0;
 
-void handle_sigint(int) { autoClicker.shutdown(); }
+bool setup_xi2(Display *dpy, Window root) {
+    int event, error;
+    if (!XQueryExtension(dpy, "XInputExtension", &xi_opcode, &event, &error)) {
+        fprintf(stderr, "Error: XInput2 not available.\n");
+        return false;
+    }
+    int major = 2, minor = 3;
+    if (XIQueryVersion(dpy, &major, &minor) != Success) {
+        fprintf(stderr, "Error: XI2 version not compatible\n");
+        return false;
+    }
+
+    XIEventMask mask;
+    unsigned char mask_data[(XI_LASTEVENT + 7) / 8] = {0};
+    mask.deviceid = XIAllMasterDevices;
+    mask.mask_len = sizeof(mask_data);
+    mask.mask = mask_data;
+    XISetMask(mask.mask, XI_RawButtonPress);
+    XISetMask(mask.mask, XI_RawButtonRelease);
+
+    XISelectEvents(dpy, root, &mask, 1);
+    XFlush(dpy);
+    return true;
+}
+
+void printHelp() {
+    cout << "Usage:\n"
+            << "  -i <interval> -m <l|r>\n";
+}
 
 int main(int argc, char *argv[]) {
-    QApplication app(argc, argv);
-
-    QWidget window;
-    window.setWindowTitle("Autoclicker");
-    auto *input = new QLineEdit(&window);
-    input->setPlaceholderText("Enter an integer value");
-    auto *button = new QPushButton("Save", &window);
-    auto *layout = new QVBoxLayout();
-
-    layout->addWidget(input);
-    layout->addWidget(button);
-    window.setLayout(layout);
-
-    QObject::connect(button, &QPushButton::clicked, [&]() {
-        bool ok;
-        int value = input->text().toInt(&ok);
-        if (!ok) {
-            QMessageBox::warning(&window, "Invalid input", QObject::tr("Invalid input"));
-            return;
-        }
-        autoClicker.setDelay(value);
-        cout << "delay set to " << value << endl;
-    });
-
-    window.show();
-
     signal(SIGINT, handle_sigint);
-    return app.exec();
+
+    int interval = 0;
+    string mode;
+    bool hasI = false;
+    bool hasM = false;
+
+    for (int i = 1; i < argc; ++i) {
+        string arg = argv[i];
+
+        if (arg == "-i" && i + 1 < argc) {
+            interval = atoi(argv[++i]);
+            hasI = true;
+        } else if (arg == "-m" && i + 1 < argc) {
+            mode = argv[++i];
+            hasM = true;
+        }
+    }
+
+    if (!hasI || !hasM) {
+        printHelp();
+        return 1;
+    }
+
+    if (mode != "l" && mode != "r") {
+        cerr << "Error: Mode must be 'l' or 'r'.\n";
+        return 1;
+    }
+
+    Display *dpy = XOpenDisplay(nullptr);
+    if (!dpy) {
+        fprintf(stderr, "Error: Could not open display.\n");
+        return 1;
+    }
+
+    int ev, err, maj, min;
+    if (!XTestQueryExtension(dpy, &ev, &err, &maj, &min)) {
+        fprintf(stderr, "Error: XTest extension not available.\n");
+        return 1;
+    }
+
+    Window root = DefaultRootWindow(dpy);
+    if (!setup_xi2(dpy, root))
+        return 1;
+
+    const unsigned int TOGGLE_BUTTON = 9;
+    bool active = false;
+    bool btn_down = false;
+    auto last_click = chrono::steady_clock::now();
+
+    puts("Autoclicker: Front page button (Button9) toggles globally. Ctrl+C exits.");
+
+    while (keep_running) {
+        while (XPending(dpy)) {
+            XEvent evnt;
+            XNextEvent(dpy, &evnt);
+
+            if (evnt.type == GenericEvent && evnt.xcookie.extension == xi_opcode) {
+                if (XGetEventData(dpy, &evnt.xcookie)) {
+                    if (evnt.xcookie.evtype == XI_RawButtonPress ||
+                        evnt.xcookie.evtype == XI_RawButtonRelease) {
+                        XIRawEvent *raw = reinterpret_cast<XIRawEvent *>(evnt.xcookie.data);
+                        unsigned int btn = raw->detail;
+
+                        if (evnt.xcookie.evtype == XI_RawButtonPress && btn == TOGGLE_BUTTON) {
+                            if (!btn_down) {
+                                active = !active;
+                                printf("Auto-Click: %s\n", active ? "AN" : "AUS");
+                                fflush(stdout);
+                            }
+                            btn_down = true;
+                        } else if (evnt.xcookie.evtype == XI_RawButtonRelease && btn == TOGGLE_BUTTON) {
+                            btn_down = false;
+                        }
+                    }
+                    XFreeEventData(dpy, &evnt.xcookie);
+                }
+            }
+        }
+
+        auto now = chrono::steady_clock::now();
+        if (active && now - last_click >= chrono::milliseconds(interval)) {
+            if (mode == "l") {
+                XTestFakeButtonEvent(dpy, 1, True, CurrentTime);
+                XTestFakeButtonEvent(dpy, 1, False, CurrentTime);
+            } else {
+                XTestFakeButtonEvent(dpy, 3, True, CurrentTime);
+                XTestFakeButtonEvent(dpy, 3, False, CurrentTime);
+            }
+            XFlush(dpy);
+            last_click = now;
+        }
+
+        this_thread::sleep_for(chrono::milliseconds(5));
+    }
+
+    XCloseDisplay(dpy);
+    return 0;
 }
