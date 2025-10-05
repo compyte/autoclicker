@@ -1,14 +1,10 @@
 #include <QApplication>
-#include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
 #include <QVBoxLayout>
 #include <QMessageBox>
 #include <iostream>
 #include <X11/Xlib.h>
-#include <X11/extensions/XTest.h>
-#include <X11/extensions/XInput2.h>
-#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <thread>
